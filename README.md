@@ -57,6 +57,17 @@ Start the app:
 python -m streamlit run mvp/app.py
 ```
 
+## Deploying The App
+
+For the easiest Streamlit Community Cloud deployment, use:
+
+- Repository: `GarrettChonko/mae301-2026spring-PantryPilot`
+- Branch: `main`
+- Main file path: `mvp/app.py`
+- Python version: `3.12`
+
+No extra secrets are required for the default hosted demo. If Kroger credentials are not configured, PantryPilot stays in mock-pricing mode. If the larger local processed recipe dataset is not present in GitHub, the app falls back to the tracked built-in sample runtime instead of crashing.
+
 ## Pricing Modes
 
 PantryPilot works without API keys by using mock grocery pricing.

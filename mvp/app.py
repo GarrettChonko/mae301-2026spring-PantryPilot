@@ -1,7 +1,15 @@
+from pathlib import Path
+import sys
 from dataclasses import replace
 from datetime import datetime
 
 import streamlit as st
+
+# Streamlit Community Cloud runs the app from mvp/, so ensure the repo root is
+# importable before loading the top-level pantry_pilot package.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from pantry_pilot.app_runtime import build_planner_and_context, format_calorie_target
 from pantry_pilot.favorites import DEFAULT_FAVORITES_PATH, FavoritePlanStore
