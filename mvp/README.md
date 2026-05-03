@@ -88,7 +88,8 @@ The stats file summarizes:
 The app will:
 
 - prefer `mvp/data/processed/recipenlg-full-20260416T0625Z.json` when a valid processed dataset is present
-- fall back to the built-in curated sample dataset otherwise
+- otherwise load the tracked sharded deployment corpus in `mvp/data/processed/recipenlg-deployment/`
+- fall back to the built-in curated sample dataset only if neither processed runtime is usable
 
 ## Run tests
 
@@ -109,5 +110,5 @@ Run only importer and dataset tests:
 - The planner remains deterministic for the same settings.
 - Unknown or incomplete allergen metadata is treated as unsafe.
 - Grocery pricing still falls back to the local mock provider when store pricing is unavailable.
-- The processed dataset integration is conservative: invalid processed files cleanly fall back to the built-in sample dataset.
+- The processed dataset integration is conservative: invalid processed files cleanly fall back from the full file to the tracked deployment shards and then to the built-in sample dataset.
 - For long RecipeNLG runs in this environment, use a direct attached `.\.venv\Scripts\python.exe ...` invocation rather than `Start-Process`.

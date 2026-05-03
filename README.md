@@ -68,6 +68,12 @@ For the easiest Streamlit Community Cloud deployment, use:
 
 No extra secrets are required for the default hosted demo. If Kroger credentials are not configured, PantryPilot stays in mock-pricing mode. If the larger local processed recipe dataset is not present in GitHub, the app falls back to the tracked built-in sample runtime instead of crashing.
 
+Hosted runtime priority order:
+
+- local full processed dataset: `mvp/data/processed/recipenlg-full-20260416T0625Z.json`
+- tracked deployment shards: `mvp/data/processed/recipenlg-deployment/`
+- built-in sample fallback in `pantry_pilot/sample_data.py`
+
 ## Pricing Modes
 
 PantryPilot works without API keys by using mock grocery pricing.

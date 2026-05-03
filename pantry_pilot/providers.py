@@ -19,6 +19,7 @@ from pantry_pilot.sample_data import sample_recipes
 KROGER_API_BASE_URL = "https://api.kroger.com/v1"
 KROGER_TOKEN_URL = "https://api.kroger.com/v1/connect/oauth2/token"
 DEFAULT_PROCESSED_RECIPES_PATH = Path("mvp/data/processed/recipenlg-full-20260416T0625Z.json")
+DEFAULT_DEPLOYMENT_PROCESSED_RECIPES_PATH = Path("mvp/data/processed/recipenlg-deployment")
 
 
 class GroceryProvider(Protocol):
@@ -59,17 +60,32 @@ def resolve_recipe_runtime(
     if processed_recipes:
         return processed_recipes, RecipeRuntimeStatus(
             processed_dataset_path=dataset_path,
-            processed_dataset_exists=dataset_path.exists() and dataset_path.is_file(),
+            processed_dataset_exists=_processed_dataset_path_exists(dataset_path),
             processed_recipe_count=len(processed_recipes),
             active_source="processed-dataset",
             fallback_active=False,
         )
 
+    deployment_dataset_path = DEFAULT_DEPLOYMENT_PROCESSED_RECIPES_PATH
+    if dataset_path != deployment_dataset_path:
+        deployment_recipes = load_processed_recipes(deployment_dataset_path)
+        if deployment_recipes:
+            return deployment_recipes, RecipeRuntimeStatus(
+                processed_dataset_path=deployment_dataset_path,
+                processed_dataset_exists=_processed_dataset_path_exists(deployment_dataset_path),
+                processed_recipe_count=len(deployment_recipes),
+                active_source="processed-deployment-shards",
+                fallback_active=False,
+            )
+
     fallback_reason = _processed_dataset_failure_reason(dataset_path)
+    if dataset_path != deployment_dataset_path:
+        deployment_failure_reason = _processed_dataset_failure_reason(deployment_dataset_path)
+        fallback_reason = f"{fallback_reason}; deployment shards: {deployment_failure_reason}"
     fallback_recipes = sample_recipes()
     return fallback_recipes, RecipeRuntimeStatus(
         processed_dataset_path=dataset_path,
-        processed_dataset_exists=dataset_path.exists() and dataset_path.is_file(),
+        processed_dataset_exists=_processed_dataset_path_exists(dataset_path),
         processed_recipe_count=0,
         active_source="sample-fallback",
         fallback_active=True,
@@ -81,14 +97,12 @@ def resolve_recipe_runtime(
 @lru_cache(maxsize=8)
 def load_processed_recipes(processed_dataset_path: str | Path) -> tuple[Recipe, ...]:
     dataset_path = Path(processed_dataset_path)
+    if dataset_path.is_dir():
+        return _load_processed_recipe_shards(dataset_path)
     if not dataset_path.exists() or not dataset_path.is_file():
         return ()
-    try:
-        payload = json.loads(dataset_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ()
-    rows = payload.get("recipes")
-    if not isinstance(rows, list):
+    rows = _load_processed_recipe_rows(dataset_path)
+    if rows is None:
         return ()
 
     recipes: list[Recipe] = []
@@ -100,24 +114,86 @@ def load_processed_recipes(processed_dataset_path: str | Path) -> tuple[Recipe, 
     return tuple(sorted(recipes, key=lambda recipe: recipe.title))
 
 
+def _load_processed_recipe_rows(dataset_path: Path) -> list[object] | None:
+    try:
+        payload = json.loads(dataset_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    rows = payload.get("recipes")
+    if not isinstance(rows, list):
+        return None
+    return rows
+
+
+def _load_processed_recipe_shards(dataset_dir: Path) -> tuple[Recipe, ...]:
+    manifest_path = dataset_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+    shard_names = manifest.get("shards")
+    if not isinstance(shard_names, list) or not shard_names:
+        return ()
+
+    recipes: list[Recipe] = []
+    for shard_name in shard_names:
+        if not isinstance(shard_name, str) or not shard_name.strip():
+            return ()
+        rows = _load_processed_recipe_rows(dataset_dir / shard_name)
+        if rows is None:
+            return ()
+        for row in rows:
+            recipe = _load_processed_recipe_row(row)
+            if recipe is None:
+                return ()
+            recipes.append(recipe)
+    return tuple(sorted(recipes, key=lambda recipe: recipe.title))
+
+
 def _processed_dataset_failure_reason(processed_dataset_path: str | Path) -> str:
     dataset_path = Path(processed_dataset_path)
     if not dataset_path.exists():
         return "processed dataset path does not exist"
+    if dataset_path.is_dir():
+        manifest_path = dataset_path / "manifest.json"
+        if not manifest_path.exists():
+            return "processed shard manifest does not exist"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except OSError:
+            return "processed shard manifest could not be read"
+        except json.JSONDecodeError:
+            return "processed shard manifest is not valid JSON"
+        shard_names = manifest.get("shards")
+        if not isinstance(shard_names, list) or not shard_names:
+            return "processed shard manifest is missing a valid shards list"
+        for shard_name in shard_names:
+            if not isinstance(shard_name, str) or not shard_name.strip():
+                return "processed shard manifest contains an invalid shard entry"
+            shard_path = dataset_path / shard_name
+            if not shard_path.exists():
+                return f"processed shard is missing: {shard_name}"
+            rows = _load_processed_recipe_rows(shard_path)
+            if rows is None:
+                return f"processed shard could not be loaded safely: {shard_name}"
+            if not rows:
+                return f"processed shard has no recipes: {shard_name}"
+        return "processed dataset shards could not be loaded safely"
     if not dataset_path.is_file():
         return "processed dataset path is not a file"
     try:
-        payload = json.loads(dataset_path.read_text(encoding="utf-8"))
+        rows = _load_processed_recipe_rows(dataset_path)
     except OSError:
         return "processed dataset could not be read"
-    except json.JSONDecodeError:
+    if rows is None:
         return "processed dataset is not valid JSON"
-    rows = payload.get("recipes")
-    if not isinstance(rows, list):
-        return "processed dataset is missing a valid recipes list"
     if not rows:
         return "processed dataset has no recipes"
     return "processed dataset rows could not be loaded safely"
+
+
+def _processed_dataset_path_exists(processed_dataset_path: Path) -> bool:
+    return processed_dataset_path.exists() and (processed_dataset_path.is_file() or processed_dataset_path.is_dir())
 
 
 def _load_processed_recipe_row(row: object) -> Recipe | None:

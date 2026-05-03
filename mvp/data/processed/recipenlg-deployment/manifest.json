@@ -1,0 +1,13 @@
+{
+  "source": "recipenlg-full-20260416T0625Z.json",
+  "recipe_count": 23021,
+  "shard_size": 4000,
+  "shards": [
+    "recipes-0001.json",
+    "recipes-0002.json",
+    "recipes-0003.json",
+    "recipes-0004.json",
+    "recipes-0005.json",
+    "recipes-0006.json"
+  ]
+}

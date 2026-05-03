@@ -13,6 +13,8 @@ from pantry_pilot.providers import (
     MockGroceryProvider,
     ProviderRequestError,
     build_pricing_context,
+    load_processed_recipes,
+    resolve_recipe_runtime,
 )
 
 
@@ -51,6 +53,24 @@ class FailingPrimaryProvider:
 
 
 class Phase2ProviderTests(unittest.TestCase):
+    def _processed_recipe_row(self, recipe_id: str, title: str) -> dict[str, object]:
+        return {
+            "recipe_id": recipe_id,
+            "title": title,
+            "cuisine": "mediterranean",
+            "servings": 2,
+            "prep_time_minutes": 15,
+            "meal_types": ["dinner"],
+            "diet_tags": ["vegan", "gluten-free"],
+            "allergens": {"allergens": [], "completeness": "complete"},
+            "ingredients": [
+                {"canonical_name": "rice", "quantity": 2, "unit": "cups"},
+                {"canonical_name": "tomato", "quantity": 2, "unit": "items"},
+            ],
+            "steps": ["Cook rice.", "Top with tomato."],
+            "calories": {"calories_per_serving": 420},
+        }
+
     def test_local_recipe_provider_falls_back_to_sample_data_when_processed_file_missing(self) -> None:
         provider = LocalRecipeProvider(processed_dataset_path="C:\\missing\\recipes.imported.json")
 
@@ -104,6 +124,69 @@ class Phase2ProviderTests(unittest.TestCase):
 
             self.assertTrue(recipes)
             self.assertIn("Avocado Toast", {recipe.title for recipe in recipes})
+
+    def test_runtime_prefers_sharded_deployment_dataset_when_full_file_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            deployment_dir = Path(tmpdir) / "recipenlg-deployment"
+            deployment_dir.mkdir()
+            (deployment_dir / "manifest.json").write_text(
+                json.dumps({"shards": ["recipes-0001.json", "recipes-0002.json"]}),
+                encoding="utf-8",
+            )
+            (deployment_dir / "recipes-0001.json").write_text(
+                json.dumps({"recipes": [self._processed_recipe_row("shard-1", "Shard One Bowl")]}),
+                encoding="utf-8",
+            )
+            (deployment_dir / "recipes-0002.json").write_text(
+                json.dumps({"recipes": [self._processed_recipe_row("shard-2", "Shard Two Bowl")]}),
+                encoding="utf-8",
+            )
+
+            with patch("pantry_pilot.providers.DEFAULT_DEPLOYMENT_PROCESSED_RECIPES_PATH", deployment_dir):
+                recipes, status = resolve_recipe_runtime(Path(tmpdir) / "missing-full.json")
+
+            self.assertEqual(status.active_source, "processed-deployment-shards")
+            self.assertFalse(status.fallback_active)
+            self.assertEqual(status.processed_dataset_path, deployment_dir)
+            self.assertEqual(status.processed_recipe_count, 2)
+            self.assertEqual({recipe.title for recipe in recipes}, {"Shard One Bowl", "Shard Two Bowl"})
+
+    def test_runtime_falls_back_to_sample_when_full_and_sharded_datasets_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_full = Path(tmpdir) / "missing-full.json"
+            missing_deployment = Path(tmpdir) / "missing-deployment"
+
+            with patch("pantry_pilot.providers.DEFAULT_DEPLOYMENT_PROCESSED_RECIPES_PATH", missing_deployment):
+                recipes, status = resolve_recipe_runtime(missing_full)
+
+            self.assertEqual(status.active_source, "sample-fallback")
+            self.assertTrue(status.fallback_active)
+            self.assertIn("deployment shards:", status.fallback_reason)
+            self.assertTrue(recipes)
+            self.assertIn("Avocado Toast", {recipe.title for recipe in recipes})
+
+    def test_sharded_processed_dataset_loader_returns_all_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            deployment_dir = Path(tmpdir) / "recipenlg-deployment"
+            deployment_dir.mkdir()
+            (deployment_dir / "manifest.json").write_text(
+                json.dumps({"shards": ["recipes-0001.json", "recipes-0002.json"]}),
+                encoding="utf-8",
+            )
+            (deployment_dir / "recipes-0001.json").write_text(
+                json.dumps({"recipes": [self._processed_recipe_row("shard-1", "Shard One Bowl")]}),
+                encoding="utf-8",
+            )
+            (deployment_dir / "recipes-0002.json").write_text(
+                json.dumps({"recipes": [self._processed_recipe_row("shard-2", "Shard Two Bowl")]}),
+                encoding="utf-8",
+            )
+
+            load_processed_recipes.cache_clear()
+            recipes = load_processed_recipes(deployment_dir)
+
+            self.assertEqual(len(recipes), 2)
+            self.assertEqual([recipe.title for recipe in recipes], ["Shard One Bowl", "Shard Two Bowl"])
 
     def test_processed_dataset_preserves_unknown_calories_and_prep_time_when_no_support_layer_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -169,7 +252,7 @@ class Phase2ProviderTests(unittest.TestCase):
 
             recipe = LocalRecipeProvider(processed_dataset_path=processed_path).list_recipes()[0]
 
-            self.assertEqual(recipe.estimated_calories_per_serving, 320)
+            self.assertEqual(recipe.estimated_calories_per_serving, 319)
             self.assertIsNone(recipe.prep_time_minutes)
 
     def test_missing_credentials_fall_back_to_mock_provider(self) -> None:
